@@ -1,0 +1,33 @@
+resources:
+  jobs:
+    estoque_hospitalar_pipeline:
+      name: estoque_hospitalar_pipeline
+      tasks:
+        - task_key: to_Bronze
+          notebook_task:
+            notebook_path: /Workspace/Fullstack project/Landing_to_Bronze
+            source: WORKSPACE
+        - task_key: to_Silver
+          depends_on:
+            - task_key: to_Bronze
+          notebook_task:
+            notebook_path: /Workspace/Fullstack project/Bronze_to_Silver
+            source: WORKSPACE
+        - task_key: to_Gold
+          depends_on:
+            - task_key: to_Silver
+          notebook_task:
+            notebook_path: /Workspace/Fullstack project/Silver_to_Gold
+            source: WORKSPACE
+        - task_key: to_ML
+          depends_on:
+            - task_key: to_Gold
+          notebook_task:
+            notebook_path: /Workspace/Fullstack project/Gold_to_ML
+            source: WORKSPACE
+      queue:
+        enabled: true
+      parameters:
+        - name: catalogo
+          default: estoque_hospitalar
+      performance_target: PERFORMANCE_OPTIMIZED
