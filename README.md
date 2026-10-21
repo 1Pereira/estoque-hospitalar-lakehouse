@@ -97,6 +97,8 @@ to_Bronze  →  to_Silver  →  to_Gold  →  to_ML  →  to_Dashboard
 
 ## Dashboard
 
+[Visão geral](docs/dashboard_visao_geral.png)
+
 Dashboard AI/BI com 12 datasets em SQL sobre a Gold e 6 páginas:
 
 | Página | Conteúdo |
