@@ -1,0 +1,3636 @@
+{
+  "datasets": [
+    {
+      "name": "ds_mensal",
+      "displayName": "Indicadores mensais",
+      "queryLines": [
+        "SELECT\n",
+        "  m.dt_inicio_mes,\n",
+        "  l.ds_estabelecimento,\n",
+        "  l.ds_local_estoque,\n",
+        "  mat.ds_grupo,\n",
+        "  SUM(m.vl_consumo_liquido) AS vl_consumo,\n",
+        "  SUM(m.vl_perda) AS vl_perda,\n",
+        "  SUM(m.vl_entrada_nf) AS vl_entrada_nf,\n",
+        "  SUM(m.vl_saldo_final) AS vl_estoque_final,\n",
+        "  SUM(m.vl_estoque_medio) AS vl_estoque_medio,\n",
+        "  SUM(m.nr_dias_ruptura) AS nr_dias_ruptura,\n",
+        "  -- Dias-item com atividade: base da taxa de ruptura\n",
+        "  SUM(CASE WHEN m.qt_consumo_liquido > 0 OR m.nr_dias_ruptura > 0 THEN m.nr_dias ELSE 0 END) AS nr_dias_ativos\n",
+        "FROM estoque_hospitalar.gold.mart_indicadores_estoque m\n",
+        "JOIN estoque_hospitalar.gold.dim_local l USING (cd_local_estoque)\n",
+        "JOIN estoque_hospitalar.gold.dim_material mat USING (cd_material)\n",
+        "GROUP BY ALL\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Taxa de ruptura",
+          "expression": "try_divide(SUM(`nr_dias_ruptura`), SUM(`nr_dias_ativos`))"
+        },
+        {
+          "displayName": "Perdas sobre consumo",
+          "expression": "try_divide(SUM(`vl_perda`), SUM(`vl_consumo`))"
+        },
+        {
+          "displayName": "Giro mensal",
+          "expression": "try_divide(SUM(`vl_consumo`), SUM(`vl_estoque_medio`))"
+        }
+      ]
+    },
+    {
+      "name": "ds_posicao_atual",
+      "displayName": "Posição atual",
+      "queryLines": [
+        "WITH ultimo AS (\n",
+        "  SELECT MAX(dt_inicio_mes) AS dt_mes FROM estoque_hospitalar.gold.mart_indicadores_estoque\n",
+        "),\n",
+        "consumo_3m AS (\n",
+        "  -- Consumo médio diário dos últimos 3 meses, base da cobertura\n",
+        "  SELECT m.cd_material, m.cd_local_estoque, SUM(m.vl_consumo_liquido) / SUM(m.nr_dias) AS vl_consumo_diario\n",
+        "  FROM estoque_hospitalar.gold.mart_indicadores_estoque m, ultimo u\n",
+        "  WHERE m.dt_inicio_mes > add_months(u.dt_mes, -3)\n",
+        "  GROUP BY ALL\n",
+        ")\n",
+        "SELECT\n",
+        "  mat.ds_material,\n",
+        "  mat.ds_grupo,\n",
+        "  l.ds_estabelecimento,\n",
+        "  l.ds_local_estoque,\n",
+        "  abc.ds_classe_abc,\n",
+        "  m.qt_saldo_final,\n",
+        "  m.vl_saldo_final,\n",
+        "  m.qt_dias_sem_saida,\n",
+        "  m.fl_parado,\n",
+        "  CASE WHEN m.fl_parado THEN m.vl_saldo_final ELSE 0 END AS vl_parado,\n",
+        "  CASE WHEN m.fl_parado THEN 1 ELSE 0 END AS nr_parado,\n",
+        "  c.vl_consumo_diario\n",
+        "FROM estoque_hospitalar.gold.mart_indicadores_estoque m\n",
+        "JOIN ultimo u ON m.dt_inicio_mes = u.dt_mes\n",
+        "JOIN estoque_hospitalar.gold.dim_material mat USING (cd_material)\n",
+        "JOIN estoque_hospitalar.gold.dim_local l USING (cd_local_estoque)\n",
+        "LEFT JOIN estoque_hospitalar.gold.mart_curva_abc_xyz abc USING (cd_material)\n",
+        "LEFT JOIN consumo_3m c USING (cd_material, cd_local_estoque)\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Cobertura dias",
+          "expression": "try_divide(SUM(`vl_saldo_final`), SUM(`vl_consumo_diario`))"
+        },
+        {
+          "displayName": "Estoque parado pct",
+          "expression": "try_divide(SUM(`vl_parado`), SUM(`vl_saldo_final`))"
+        }
+      ]
+    },
+    {
+      "name": "ds_vencimento",
+      "displayName": "Vencimento dos lotes",
+      "queryLines": [
+        "SELECT\n",
+        "  -- Prefixo numérico mantém as faixas em ordem no gráfico\n",
+        "  CASE p.ds_faixa_vencimento\n",
+        "    WHEN 'Vencido' THEN '1. Vencido'\n",
+        "    WHEN 'Até 30 dias' THEN '2. Até 30 dias'\n",
+        "    WHEN '31 a 90 dias' THEN '3. 31 a 90 dias'\n",
+        "    WHEN '91 a 180 dias' THEN '4. 91 a 180 dias'\n",
+        "    WHEN 'Acima de 180 dias' THEN '5. Acima de 180 dias'\n",
+        "    ELSE '6. Sem validade'\n",
+        "  END AS ds_faixa_vencimento,\n",
+        "  l.ds_estabelecimento,\n",
+        "  mat.ds_grupo,\n",
+        "  SUM(p.vl_estoque) AS vl_estoque\n",
+        "FROM estoque_hospitalar.gold.fact_lote_posicao p\n",
+        "JOIN estoque_hospitalar.gold.dim_material mat USING (cd_material)\n",
+        "JOIN estoque_hospitalar.gold.dim_local l USING (cd_local_estoque)\n",
+        "WHERE p.dt_posicao = (SELECT MAX(dt_posicao) FROM estoque_hospitalar.gold.fact_lote_posicao)\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "ds_consumo_setor",
+      "displayName": "Consumo por centro de custo",
+      "queryLines": [
+        "SELECT\n",
+        "  c.dt_inicio_mes,\n",
+        "  cc.ds_centro_custo,\n",
+        "  cc.ds_estabelecimento,\n",
+        "  SUM(c.vl_consumo_liquido) AS vl_consumo\n",
+        "FROM estoque_hospitalar.gold.mart_consumo_mensal c\n",
+        "JOIN estoque_hospitalar.gold.dim_centro_custo cc USING (cd_centro_custo)\n",
+        "GROUP BY ALL\n"
+      ]
+    },
+    {
+      "name": "ds_compras",
+      "displayName": "Compras por fornecedor",
+      "queryLines": [
+        "SELECT\n",
+        "  mf.dt_inicio_mes,\n",
+        "  f.nm_fantasia AS ds_fornecedor,\n",
+        "  mf.vl_comprado,\n",
+        "  mf.vl_frete,\n",
+        "  mf.nr_notas,\n",
+        "  mf.nr_itens,\n",
+        "  -- Ponderados pelos itens para a média do período sair correta\n",
+        "  mf.qt_dias_medio_emissao_entrada * mf.nr_itens AS qt_dias_ponderado,\n",
+        "  mf.pc_variacao_preco_media * mf.nr_itens AS pc_variacao_ponderada,\n",
+        "  CASE WHEN mf.pc_variacao_preco_media IS NOT NULL THEN mf.nr_itens ELSE 0 END AS nr_itens_com_variacao\n",
+        "FROM estoque_hospitalar.gold.mart_fornecedor mf\n",
+        "JOIN estoque_hospitalar.gold.dim_fornecedor f USING (cd_fornecedor)\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Ticket medio NF",
+          "expression": "try_divide(SUM(`vl_comprado`), SUM(`nr_notas`))"
+        },
+        {
+          "displayName": "Prazo medio dias",
+          "expression": "try_divide(SUM(`qt_dias_ponderado`), SUM(`nr_itens`))"
+        },
+        {
+          "displayName": "Variacao de preco",
+          "expression": "try_divide(SUM(`pc_variacao_ponderada`), SUM(`nr_itens_com_variacao`))"
+        }
+      ]
+    },
+    {
+      "name": "ds_curva_abc",
+      "displayName": "Curva ABC/XYZ",
+      "queryLines": [
+        "SELECT\n",
+        "  ROW_NUMBER() OVER (ORDER BY vl_consumo_12m DESC) AS nr_posicao,\n",
+        "  ds_material,\n",
+        "  ds_grupo,\n",
+        "  ds_classe_abc,\n",
+        "  ds_classe_xyz,\n",
+        "  ds_classe_abc_xyz,\n",
+        "  vl_consumo_12m,\n",
+        "  pc_acumulado,\n",
+        "  nr_cv_semanal\n",
+        "FROM estoque_hospitalar.gold.mart_curva_abc_xyz\n"
+      ]
+    },
+    {
+      "name": "ds_backtest",
+      "displayName": "Backtest da previsão",
+      "queryLines": [
+        "SELECT\n",
+        "  b.dt_inicio_semana,\n",
+        "  CAST(b.nr_horizonte AS STRING) AS ds_horizonte,\n",
+        "  b.ds_classe_abc,\n",
+        "  b.ds_classe_xyz,\n",
+        "  m.ds_material,\n",
+        "  b.qt_consumo,\n",
+        "  b.qt_previsto_modelo,\n",
+        "  b.qt_previsto_media_4,\n",
+        "  b.qt_previsto_ingenuo,\n",
+        "  ABS(b.qt_consumo - b.qt_previsto_modelo) AS qt_erro_modelo,\n",
+        "  ABS(b.qt_consumo - b.qt_previsto_media_4) AS qt_erro_media_4,\n",
+        "  ABS(b.qt_consumo - b.qt_previsto_ingenuo) AS qt_erro_ingenuo\n",
+        "FROM estoque_hospitalar.gold.ml_backtest_demanda b\n",
+        "JOIN estoque_hospitalar.gold.dim_material m USING (cd_material)\n"
+      ],
+      "columns": [
+        {
+          "displayName": "WAPE modelo",
+          "expression": "try_divide(SUM(`qt_erro_modelo`), SUM(`qt_consumo`))"
+        },
+        {
+          "displayName": "WAPE media 4",
+          "expression": "try_divide(SUM(`qt_erro_media_4`), SUM(`qt_consumo`))"
+        },
+        {
+          "displayName": "WAPE ingenuo",
+          "expression": "try_divide(SUM(`qt_erro_ingenuo`), SUM(`qt_consumo`))"
+        }
+      ]
+    },
+    {
+      "name": "ds_previsao",
+      "displayName": "Previsão de demanda",
+      "queryLines": [
+        "-- Histórico recente e previsão no mesmo eixo, em formato longo\n",
+        "WITH historico AS (\n",
+        "  SELECT cd_material, dt_inicio_semana, 'Realizado' AS ds_serie, qt_consumo AS qt\n",
+        "  FROM estoque_hospitalar.gold.ml_demanda_semanal\n",
+        "  WHERE fl_semana_completa\n",
+        "    AND dt_inicio_semana > (SELECT date_sub(MAX(dt_inicio_semana), 26 * 7) FROM estoque_hospitalar.gold.ml_demanda_semanal)\n",
+        "),\n",
+        "previsao AS (\n",
+        "  SELECT cd_material, dt_inicio_semana, s.ds_serie, s.qt\n",
+        "  FROM estoque_hospitalar.gold.ml_previsao_demanda\n",
+        "  LATERAL VIEW inline(array(\n",
+        "    named_struct('ds_serie', 'Previsto', 'qt', qt_previsto),\n",
+        "    named_struct('ds_serie', 'Limite inferior', 'qt', qt_previsto_inferior),\n",
+        "    named_struct('ds_serie', 'Limite superior', 'qt', qt_previsto_superior)\n",
+        "  )) s\n",
+        ")\n",
+        "SELECT m.ds_material, m.ds_grupo, u.dt_inicio_semana, u.ds_serie, u.qt\n",
+        "FROM (SELECT * FROM historico UNION ALL SELECT * FROM previsao) u\n",
+        "JOIN estoque_hospitalar.gold.dim_material m USING (cd_material)\n"
+      ]
+    },
+    {
+      "name": "ds_sugestao",
+      "displayName": "Sugestão de compra",
+      "queryLines": [
+        "SELECT\n",
+        "  s.ds_material,\n",
+        "  s.ds_classe_abc,\n",
+        "  s.ds_politica,\n",
+        "  f.nm_fantasia AS ds_fornecedor,\n",
+        "  s.qt_saldo_atual,\n",
+        "  s.qt_semanas_cobertura_atual,\n",
+        "  s.qt_estoque_seguranca,\n",
+        "  s.qt_estoque_alvo,\n",
+        "  s.qt_embalagens,\n",
+        "  s.cd_unidade_compra,\n",
+        "  s.qt_sugerida_estoque,\n",
+        "  s.vl_estimado,\n",
+        "  s.fl_comprar,\n",
+        "  CASE WHEN s.qt_saldo_atual < s.qt_estoque_seguranca THEN 1 ELSE 0 END AS nr_abaixo_seguranca\n",
+        "FROM estoque_hospitalar.gold.ml_sugestao_compra s\n",
+        "LEFT JOIN estoque_hospitalar.gold.dim_fornecedor f USING (cd_fornecedor)\n",
+        "WHERE s.fl_comprar\n",
+        "ORDER BY s.vl_estimado DESC\n"
+      ]
+    },
+    {
+      "name": "ds_anomalias",
+      "displayName": "Anomalias de consumo",
+      "queryLines": [
+        "SELECT\n",
+        "  a.dt_inicio_semana,\n",
+        "  m.ds_material,\n",
+        "  a.ds_classe_abc,\n",
+        "  a.ds_tipo,\n",
+        "  a.qt_consumo,\n",
+        "  a.qt_esperado,\n",
+        "  a.nr_score,\n",
+        "  a.vl_desvio_estimado,\n",
+        "  a.fl_possivel_ruptura\n",
+        "FROM estoque_hospitalar.gold.ml_anomalia_consumo a\n",
+        "JOIN estoque_hospitalar.gold.dim_material m USING (cd_material)\n",
+        "ORDER BY a.nr_score DESC\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Possivel ruptura",
+          "expression": "SUM(CASE WHEN `fl_possivel_ruptura` THEN 1 ELSE 0 END)"
+        }
+      ]
+    },
+    {
+      "name": "ds_conciliacao",
+      "displayName": "Conciliação com o ERP",
+      "queryLines": [
+        "SELECT\n",
+        "  dt_posicao,\n",
+        "  COUNT(*) AS nr_pares,\n",
+        "  SUM(CASE WHEN fl_divergente THEN 1 ELSE 0 END) AS nr_divergentes,\n",
+        "  MAX(ABS(qt_diferenca)) AS qt_maior_diferenca\n",
+        "FROM estoque_hospitalar.gold.qualidade_conciliacao_saldo\n",
+        "GROUP BY dt_posicao\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Conciliado pct",
+          "expression": "1 - try_divide(SUM(`nr_divergentes`), SUM(`nr_pares`))"
+        }
+      ]
+    },
+    {
+      "name": "ds_itens_parados",
+      "displayName": "Itens parados",
+      "queryLines": [
+        "SELECT\n",
+        "  mat.ds_material,\n",
+        "  mat.ds_grupo,\n",
+        "  l.ds_estabelecimento,\n",
+        "  l.ds_local_estoque,\n",
+        "  m.qt_saldo_final,\n",
+        "  m.qt_dias_sem_saida,\n",
+        "  m.vl_saldo_final\n",
+        "FROM estoque_hospitalar.gold.mart_indicadores_estoque m\n",
+        "JOIN estoque_hospitalar.gold.dim_material mat USING (cd_material)\n",
+        "JOIN estoque_hospitalar.gold.dim_local l USING (cd_local_estoque)\n",
+        "WHERE m.fl_parado\n",
+        "  AND m.dt_inicio_mes = (SELECT MAX(dt_inicio_mes) FROM estoque_hospitalar.gold.mart_indicadores_estoque)\n",
+        "ORDER BY m.vl_saldo_final DESC\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "visao_geral",
+      "displayName": "Visão geral",
+      "layout": [
+        {
+          "widget": {
+            "name": "filtro_1",
+            "queries": [
+              {
+                "name": "f_ds_mensal_dt_inicio_mes",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "dt_inicio_mes",
+                      "expression": "`dt_inicio_mes`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_consumo_setor_dt_inicio_mes",
+                "query": {
+                  "datasetName": "ds_consumo_setor",
+                  "fields": [
+                    {
+                      "name": "dt_inicio_mes",
+                      "expression": "`dt_inicio_mes`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "dt_inicio_mes",
+                    "displayName": "Período",
+                    "queryName": "f_ds_mensal_dt_inicio_mes"
+                  },
+                  {
+                    "fieldName": "dt_inicio_mes",
+                    "displayName": "Período",
+                    "queryName": "f_ds_consumo_setor_dt_inicio_mes"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Período"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_2",
+            "queries": [
+              {
+                "name": "f_ds_mensal_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_posicao_atual_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_consumo_setor_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_consumo_setor",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_mensal_ds_estabelecimento"
+                  },
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_posicao_atual_ds_estabelecimento"
+                  },
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_consumo_setor_ds_estabelecimento"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estabelecimento"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_3",
+            "queries": [
+              {
+                "name": "f_ds_mensal_ds_grupo",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_posicao_atual_ds_grupo",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_grupo",
+                    "displayName": "Grupo de material",
+                    "queryName": "f_ds_mensal_ds_grupo"
+                  },
+                  {
+                    "fieldName": "ds_grupo",
+                    "displayName": "Grupo de material",
+                    "queryName": "f_ds_posicao_atual_ds_grupo"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Grupo de material"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_4",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "sum(vl_consumo)",
+                      "expression": "SUM(`vl_consumo`)"
+                    },
+                    {
+                      "name": "monthly(dt_inicio_mes)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(vl_consumo)",
+                  "displayName": "Consumo",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "period": {
+                  "fieldName": "monthly(dt_inicio_mes)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consumo"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_5",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "measure(Giro mensal)",
+                      "expression": "MEASURE(`Giro mensal`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Giro mensal)",
+                  "displayName": "Giro mensal",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Giro mensal"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_6",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "measure(Taxa de ruptura)",
+                      "expression": "MEASURE(`Taxa de ruptura`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Taxa de ruptura)",
+                  "displayName": "Taxa de ruptura",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Taxa de ruptura"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_7",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "measure(Perdas sobre consumo)",
+                      "expression": "MEASURE(`Perdas sobre consumo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Perdas sobre consumo)",
+                  "displayName": "Perdas sobre consumo",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Perdas sobre consumo"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_8",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "sum(vl_saldo_final)",
+                      "expression": "SUM(`vl_saldo_final`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(vl_saldo_final)",
+                  "displayName": "Estoque atual",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estoque atual"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_9",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "measure(Cobertura dias)",
+                      "expression": "MEASURE(`Cobertura dias`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Cobertura dias)",
+                  "displayName": "Cobertura (dias)",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Cobertura (dias)"
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "combo_consumo_estoque",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "monthly(dt_inicio_mes)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
+                    },
+                    {
+                      "name": "sum(vl_consumo)",
+                      "expression": "SUM(`vl_consumo`)"
+                    },
+                    {
+                      "name": "sum(vl_estoque_final)",
+                      "expression": "SUM(`vl_estoque_final`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "monthly(dt_inicio_mes)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "sum(vl_consumo)",
+                        "displayName": "Consumo"
+                      }
+                    ]
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "sum(vl_estoque_final)",
+                        "displayName": "Estoque no fim do mês"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consumo e estoque por mês"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_10",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    },
+                    {
+                      "name": "sum(vl_consumo)",
+                      "expression": "SUM(`vl_consumo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(vl_consumo)",
+                  "displayName": "Consumo",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "ds_grupo",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "value"
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consumo por grupo de material"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_11",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    },
+                    {
+                      "name": "sum(vl_consumo)",
+                      "expression": "SUM(`vl_consumo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(vl_consumo)",
+                  "displayName": "Consumo",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "ds_estabelecimento",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "value"
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consumo por estabelecimento"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 11,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_12",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_consumo_setor",
+                  "fields": [
+                    {
+                      "name": "ds_centro_custo",
+                      "expression": "`ds_centro_custo`"
+                    },
+                    {
+                      "name": "sum(vl_consumo)",
+                      "expression": "SUM(`vl_consumo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(vl_consumo)",
+                  "displayName": "Consumo",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "ds_centro_custo",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "value"
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consumo por centro de custo"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 10
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "estoque",
+      "displayName": "Estoque",
+      "layout": [
+        {
+          "widget": {
+            "name": "filtro_13",
+            "queries": [
+              {
+                "name": "f_ds_mensal_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_posicao_atual_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_vencimento_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_vencimento",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_itens_parados_ds_estabelecimento",
+                "query": {
+                  "datasetName": "ds_itens_parados",
+                  "fields": [
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_mensal_ds_estabelecimento"
+                  },
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_posicao_atual_ds_estabelecimento"
+                  },
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_vencimento_ds_estabelecimento"
+                  },
+                  {
+                    "fieldName": "ds_estabelecimento",
+                    "displayName": "Estabelecimento",
+                    "queryName": "f_ds_itens_parados_ds_estabelecimento"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estabelecimento"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_14",
+            "queries": [
+              {
+                "name": "f_ds_mensal_ds_grupo",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_posicao_atual_ds_grupo",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_vencimento_ds_grupo",
+                "query": {
+                  "datasetName": "ds_vencimento",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_itens_parados_ds_grupo",
+                "query": {
+                  "datasetName": "ds_itens_parados",
+                  "fields": [
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_grupo",
+                    "displayName": "Grupo de material",
+                    "queryName": "f_ds_mensal_ds_grupo"
+                  },
+                  {
+                    "fieldName": "ds_grupo",
+                    "displayName": "Grupo de material",
+                    "queryName": "f_ds_posicao_atual_ds_grupo"
+                  },
+                  {
+                    "fieldName": "ds_grupo",
+                    "displayName": "Grupo de material",
+                    "queryName": "f_ds_vencimento_ds_grupo"
+                  },
+                  {
+                    "fieldName": "ds_grupo",
+                    "displayName": "Grupo de material",
+                    "queryName": "f_ds_itens_parados_ds_grupo"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Grupo de material"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_15",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "sum(vl_parado)",
+                      "expression": "SUM(`vl_parado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(vl_parado)",
+                  "displayName": "Valor parado há mais de 90 dias",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Valor parado há mais de 90 dias"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_16",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "sum(nr_parado)",
+                      "expression": "SUM(`nr_parado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(nr_parado)",
+                  "displayName": "Itens parados (item e local)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Itens parados (item e local)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_17",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_posicao_atual",
+                  "fields": [
+                    {
+                      "name": "measure(Estoque parado pct)",
+                      "expression": "MEASURE(`Estoque parado pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Estoque parado pct)",
+                  "displayName": "Parcela do estoque parada",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Parcela do estoque parada"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "line_18",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "monthly(dt_inicio_mes)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
+                    },
+                    {
+                      "name": "measure(Taxa de ruptura)",
+                      "expression": "MEASURE(`Taxa de ruptura`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "monthly(dt_inicio_mes)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "measure(Taxa de ruptura)",
+                  "displayName": "Taxa de ruptura",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Taxa de ruptura por mês"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_19",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_vencimento",
+                  "fields": [
+                    {
+                      "name": "ds_faixa_vencimento",
+                      "expression": "`ds_faixa_vencimento`"
+                    },
+                    {
+                      "name": "sum(vl_estoque)",
+                      "expression": "SUM(`vl_estoque`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "ds_faixa_vencimento",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "alphabetical"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(vl_estoque)",
+                  "displayName": "Estoque",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estoque por prazo de validade"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 5,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_20",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal",
+                  "fields": [
+                    {
+                      "name": "ds_local_estoque",
+                      "expression": "`ds_local_estoque`"
+                    },
+                    {
+                      "name": "measure(Taxa de ruptura)",
+                      "expression": "MEASURE(`Taxa de ruptura`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "measure(Taxa de ruptura)",
+                  "displayName": "Taxa de ruptura",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "ds_local_estoque",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "value"
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Taxa de ruptura por local"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "tabela_21",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_itens_parados",
+                  "fields": [
+                    {
+                      "name": "ds_material",
+                      "expression": "`ds_material`"
+                    },
+                    {
+                      "name": "ds_local_estoque",
+                      "expression": "`ds_local_estoque`"
+                    },
+                    {
+                      "name": "qt_dias_sem_saida",
+                      "expression": "`qt_dias_sem_saida`"
+                    },
+                    {
+                      "name": "vl_saldo_final",
+                      "expression": "`vl_saldo_final`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "ds_material",
+                    "displayName": "Item"
+                  },
+                  {
+                    "fieldName": "ds_local_estoque",
+                    "displayName": "Local"
+                  },
+                  {
+                    "fieldName": "qt_dias_sem_saida",
+                    "displayName": "Dias sem saída"
+                  },
+                  {
+                    "fieldName": "vl_saldo_final",
+                    "displayName": "Valor parado",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "BRL",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Itens parados"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 11,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "compras",
+      "displayName": "Compras e curva ABC",
+      "layout": [
+        {
+          "widget": {
+            "name": "filtro_22",
+            "queries": [
+              {
+                "name": "f_ds_compras_dt_inicio_mes",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "dt_inicio_mes",
+                      "expression": "`dt_inicio_mes`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "dt_inicio_mes",
+                    "displayName": "Período",
+                    "queryName": "f_ds_compras_dt_inicio_mes"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Período"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_23",
+            "queries": [
+              {
+                "name": "f_ds_compras_ds_fornecedor",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "ds_fornecedor",
+                      "expression": "`ds_fornecedor`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_fornecedor",
+                    "displayName": "Fornecedor",
+                    "queryName": "f_ds_compras_ds_fornecedor"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Fornecedor"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_24",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "sum(vl_comprado)",
+                      "expression": "SUM(`vl_comprado`)"
+                    },
+                    {
+                      "name": "monthly(dt_inicio_mes)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(vl_comprado)",
+                  "displayName": "Compras",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "period": {
+                  "fieldName": "monthly(dt_inicio_mes)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Compras"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_25",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "sum(nr_notas)",
+                      "expression": "SUM(`nr_notas`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(nr_notas)",
+                  "displayName": "Notas fiscais"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Notas fiscais"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_26",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "measure(Ticket medio NF)",
+                      "expression": "MEASURE(`Ticket medio NF`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Ticket medio NF)",
+                  "displayName": "Ticket médio por nota",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ticket médio por nota"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_27",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "countdistinct(ds_fornecedor)",
+                      "expression": "COUNT(DISTINCT `ds_fornecedor`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "countdistinct(ds_fornecedor)",
+                  "displayName": "Fornecedores"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Fornecedores"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_28",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "measure(Prazo medio dias)",
+                      "expression": "MEASURE(`Prazo medio dias`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Prazo medio dias)",
+                  "displayName": "Prazo emissão a entrada (dias)",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Prazo emissão a entrada (dias)"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_29",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "measure(Variacao de preco)",
+                      "expression": "MEASURE(`Variacao de preco`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Variacao de preco)",
+                  "displayName": "Variação de preço",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Variação de preço"
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_30",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "monthly(dt_inicio_mes)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
+                    },
+                    {
+                      "name": "sum(vl_comprado)",
+                      "expression": "SUM(`vl_comprado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "monthly(dt_inicio_mes)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(vl_comprado)",
+                  "displayName": "Compras",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Compras por mês"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_31",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compras",
+                  "fields": [
+                    {
+                      "name": "ds_fornecedor",
+                      "expression": "`ds_fornecedor`"
+                    },
+                    {
+                      "name": "sum(vl_comprado)",
+                      "expression": "SUM(`vl_comprado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(vl_comprado)",
+                  "displayName": "Compras",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "ds_fornecedor",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "value"
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Compras por fornecedor"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 5,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "pivot_abc_xyz",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_curva_abc",
+                  "fields": [
+                    {
+                      "name": "ds_classe_abc",
+                      "expression": "`ds_classe_abc`"
+                    },
+                    {
+                      "name": "ds_classe_xyz",
+                      "expression": "`ds_classe_xyz`"
+                    },
+                    {
+                      "name": "count(*)",
+                      "expression": "COUNT(`*`)"
+                    },
+                    {
+                      "name": "sum(vl_consumo_12m)",
+                      "expression": "SUM(`vl_consumo_12m`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "pivot",
+              "encodings": {
+                "rows": [
+                  {
+                    "fieldName": "ds_classe_abc",
+                    "displayName": "Classe ABC"
+                  }
+                ],
+                "columns": [
+                  {
+                    "fieldName": "ds_classe_xyz",
+                    "displayName": "Classe XYZ"
+                  }
+                ],
+                "cell": {
+                  "type": "multi-cell",
+                  "fields": [
+                    {
+                      "fieldName": "count(*)",
+                      "displayName": "Itens",
+                      "cellType": "color-scale"
+                    },
+                    {
+                      "fieldName": "sum(vl_consumo_12m)",
+                      "displayName": "Consumo 12 meses",
+                      "cellType": "text",
+                      "format": {
+                        "type": "number-currency",
+                        "currencyCode": "BRL",
+                        "abbreviation": "compact",
+                        "decimalPlaces": {
+                          "type": "max",
+                          "places": 2
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Matriz ABC/XYZ (últimos 12 meses)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "line_32",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_curva_abc",
+                  "fields": [
+                    {
+                      "name": "nr_posicao",
+                      "expression": "`nr_posicao`"
+                    },
+                    {
+                      "name": "max(pc_acumulado)",
+                      "expression": "MAX(`pc_acumulado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "nr_posicao",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "max(pc_acumulado)",
+                  "displayName": "Consumo acumulado",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Curva de Pareto do consumo"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 13,
+            "width": 6,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "previsao",
+      "displayName": "Previsão de demanda",
+      "layout": [
+        {
+          "widget": {
+            "name": "filtro_33",
+            "queries": [
+              {
+                "name": "f_ds_backtest_ds_horizonte",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "ds_horizonte",
+                      "expression": "`ds_horizonte`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_horizonte",
+                    "displayName": "Horizonte (semanas)",
+                    "queryName": "f_ds_backtest_ds_horizonte"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Horizonte (semanas)"
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "1"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_34",
+            "queries": [
+              {
+                "name": "f_ds_backtest_ds_classe_abc",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "ds_classe_abc",
+                      "expression": "`ds_classe_abc`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_classe_abc",
+                    "displayName": "Classe ABC",
+                    "queryName": "f_ds_backtest_ds_classe_abc"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Classe ABC"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filtro_35",
+            "queries": [
+              {
+                "name": "f_ds_backtest_ds_material",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "ds_material",
+                      "expression": "`ds_material`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f_ds_previsao_ds_material",
+                "query": {
+                  "datasetName": "ds_previsao",
+                  "fields": [
+                    {
+                      "name": "ds_material",
+                      "expression": "`ds_material`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ds_material",
+                    "displayName": "Item",
+                    "queryName": "f_ds_backtest_ds_material"
+                  },
+                  {
+                    "fieldName": "ds_material",
+                    "displayName": "Item",
+                    "queryName": "f_ds_previsao_ds_material"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Item"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_36",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "measure(WAPE modelo)",
+                      "expression": "MEASURE(`WAPE modelo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(WAPE modelo)",
+                  "displayName": "WAPE do modelo",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "WAPE do modelo"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_37",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "measure(WAPE media 4)",
+                      "expression": "MEASURE(`WAPE media 4`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(WAPE media 4)",
+                  "displayName": "WAPE média móvel 4 semanas",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "WAPE média móvel 4 semanas"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_38",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "measure(WAPE ingenuo)",
+                      "expression": "MEASURE(`WAPE ingenuo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(WAPE ingenuo)",
+                  "displayName": "WAPE ingênuo (última semana)",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "WAPE ingênuo (última semana)"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_39",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "ds_classe_abc",
+                      "expression": "`ds_classe_abc`"
+                    },
+                    {
+                      "name": "measure(WAPE modelo)",
+                      "expression": "MEASURE(`WAPE modelo`)"
+                    },
+                    {
+                      "name": "measure(WAPE media 4)",
+                      "expression": "MEASURE(`WAPE media 4`)"
+                    },
+                    {
+                      "name": "measure(WAPE ingenuo)",
+                      "expression": "MEASURE(`WAPE ingenuo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "ds_classe_abc",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "measure(WAPE modelo)",
+                      "displayName": "Modelo"
+                    },
+                    {
+                      "fieldName": "measure(WAPE media 4)",
+                      "displayName": "Média 4 semanas"
+                    },
+                    {
+                      "fieldName": "measure(WAPE ingenuo)",
+                      "displayName": "Ingênuo"
+                    }
+                  ],
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "WAPE por classe ABC"
+              },
+              "mark": {
+                "layout": "group"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "line_40",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_backtest",
+                  "fields": [
+                    {
+                      "name": "weekly(dt_inicio_semana)",
+                      "expression": "DATE_TRUNC(\"WEEK\", `dt_inicio_semana`)"
+                    },
+                    {
+                      "name": "sum(qt_consumo)",
+                      "expression": "SUM(`qt_consumo`)"
+                    },
+                    {
+                      "name": "sum(qt_previsto_modelo)",
+                      "expression": "SUM(`qt_previsto_modelo`)"
+                    },
+                    {
+                      "name": "sum(qt_previsto_media_4)",
+                      "expression": "SUM(`qt_previsto_media_4`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "weekly(dt_inicio_semana)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "sum(qt_consumo)",
+                      "displayName": "Real"
+                    },
+                    {
+                      "fieldName": "sum(qt_previsto_modelo)",
+                      "displayName": "Modelo"
+                    },
+                    {
+                      "fieldName": "sum(qt_previsto_media_4)",
+                      "displayName": "Média 4 semanas"
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Backtest: real e previsto por semana"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 5,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "line_41",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_previsao",
+                  "fields": [
+                    {
+                      "name": "weekly(dt_inicio_semana)",
+                      "expression": "DATE_TRUNC(\"WEEK\", `dt_inicio_semana`)"
+                    },
+                    {
+                      "name": "sum(qt)",
+                      "expression": "SUM(`qt`)"
+                    },
+                    {
+                      "name": "ds_serie",
+                      "expression": "`ds_serie`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "weekly(dt_inicio_semana)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(qt)",
+                  "displayName": "Quantidade",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "ds_serie",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Consumo recente e previsão das próximas 4 semanas"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "sugestao",
+      "displayName": "Sugestão de compra",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_42",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sugestao",
+                  "fields": [
+                    {
+                      "name": "count(*)",
+                      "expression": "COUNT(`*`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "count(*)",
+                  "displayName": "Itens a comprar"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Itens a comprar"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_43",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sugestao",
+                  "fields": [
+                    {
+                      "name": "sum(vl_estimado)",
+                      "expression": "SUM(`vl_estimado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(vl_estimado)",
+                  "displayName": "Valor estimado",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Valor estimado"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_44",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sugestao",
+                  "fields": [
+                    {
+                      "name": "sum(nr_abaixo_seguranca)",
+                      "expression": "SUM(`nr_abaixo_seguranca`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(nr_abaixo_seguranca)",
+                  "displayName": "Abaixo do estoque de segurança"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Abaixo do estoque de segurança"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_45",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sugestao",
+                  "fields": [
+                    {
+                      "name": "ds_classe_abc",
+                      "expression": "`ds_classe_abc`"
+                    },
+                    {
+                      "name": "sum(vl_estimado)",
+                      "expression": "SUM(`vl_estimado`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "ds_classe_abc",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "alphabetical"
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(vl_estimado)",
+                  "displayName": "Valor estimado",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Valor estimado por classe ABC"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 4,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "tabela_46",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sugestao",
+                  "fields": [
+                    {
+                      "name": "ds_material",
+                      "expression": "`ds_material`"
+                    },
+                    {
+                      "name": "ds_classe_abc",
+                      "expression": "`ds_classe_abc`"
+                    },
+                    {
+                      "name": "ds_fornecedor",
+                      "expression": "`ds_fornecedor`"
+                    },
+                    {
+                      "name": "qt_saldo_atual",
+                      "expression": "`qt_saldo_atual`"
+                    },
+                    {
+                      "name": "qt_semanas_cobertura_atual",
+                      "expression": "`qt_semanas_cobertura_atual`"
+                    },
+                    {
+                      "name": "qt_estoque_seguranca",
+                      "expression": "`qt_estoque_seguranca`"
+                    },
+                    {
+                      "name": "qt_estoque_alvo",
+                      "expression": "`qt_estoque_alvo`"
+                    },
+                    {
+                      "name": "qt_embalagens",
+                      "expression": "`qt_embalagens`"
+                    },
+                    {
+                      "name": "cd_unidade_compra",
+                      "expression": "`cd_unidade_compra`"
+                    },
+                    {
+                      "name": "vl_estimado",
+                      "expression": "`vl_estimado`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "ds_material",
+                    "displayName": "Item"
+                  },
+                  {
+                    "fieldName": "ds_classe_abc",
+                    "displayName": "ABC"
+                  },
+                  {
+                    "fieldName": "ds_fornecedor",
+                    "displayName": "Fornecedor"
+                  },
+                  {
+                    "fieldName": "qt_saldo_atual",
+                    "displayName": "Saldo",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "qt_semanas_cobertura_atual",
+                    "displayName": "Cobertura (semanas)",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "qt_estoque_seguranca",
+                    "displayName": "Estoque de segurança",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "qt_estoque_alvo",
+                    "displayName": "Estoque alvo",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "qt_embalagens",
+                    "displayName": "Embalagens",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "cd_unidade_compra",
+                    "displayName": "Unidade"
+                  },
+                  {
+                    "fieldName": "vl_estimado",
+                    "displayName": "Valor",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "BRL",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Itens a comprar"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 3,
+            "width": 8,
+            "height": 9
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "monitoramento",
+      "displayName": "Monitoramento",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_47",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anomalias",
+                  "fields": [
+                    {
+                      "name": "count(*)",
+                      "expression": "COUNT(`*`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "count(*)",
+                  "displayName": "Anomalias de consumo"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalias de consumo"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_48",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anomalias",
+                  "fields": [
+                    {
+                      "name": "measure(Possivel ruptura)",
+                      "expression": "MEASURE(`Possivel ruptura`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Possivel ruptura)",
+                  "displayName": "Quedas com possível ruptura"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Quedas com possível ruptura"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_49",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_conciliacao",
+                  "fields": [
+                    {
+                      "name": "measure(Conciliado pct)",
+                      "expression": "MEASURE(`Conciliado pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Conciliado pct)",
+                  "displayName": "Saldo conciliado com o ERP",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Saldo conciliado com o ERP"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_50",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_conciliacao",
+                  "fields": [
+                    {
+                      "name": "sum(nr_divergentes)",
+                      "expression": "SUM(`nr_divergentes`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(nr_divergentes)",
+                  "displayName": "Pares divergentes"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Pares divergentes"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 0,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_51",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anomalias",
+                  "fields": [
+                    {
+                      "name": "weekly(dt_inicio_semana)",
+                      "expression": "DATE_TRUNC(\"WEEK\", `dt_inicio_semana`)"
+                    },
+                    {
+                      "name": "count(*)",
+                      "expression": "COUNT(`*`)"
+                    },
+                    {
+                      "name": "ds_tipo",
+                      "expression": "`ds_tipo`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "weekly(dt_inicio_semana)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "count(*)",
+                  "displayName": "Anomalias",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "ds_tipo",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalias por semana"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "bar_52",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_conciliacao",
+                  "fields": [
+                    {
+                      "name": "monthly(dt_posicao)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `dt_posicao`)"
+                    },
+                    {
+                      "name": "sum(nr_divergentes)",
+                      "expression": "SUM(`nr_divergentes`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "monthly(dt_posicao)",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(nr_divergentes)",
+                  "displayName": "Pares divergentes",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Divergências com o ERP por mês"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 3,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "tabela_53",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anomalias",
+                  "fields": [
+                    {
+                      "name": "dt_inicio_semana",
+                      "expression": "`dt_inicio_semana`"
+                    },
+                    {
+                      "name": "ds_material",
+                      "expression": "`ds_material`"
+                    },
+                    {
+                      "name": "ds_tipo",
+                      "expression": "`ds_tipo`"
+                    },
+                    {
+                      "name": "qt_consumo",
+                      "expression": "`qt_consumo`"
+                    },
+                    {
+                      "name": "qt_esperado",
+                      "expression": "`qt_esperado`"
+                    },
+                    {
+                      "name": "nr_score",
+                      "expression": "`nr_score`"
+                    },
+                    {
+                      "name": "fl_possivel_ruptura",
+                      "expression": "`fl_possivel_ruptura`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "dt_inicio_semana",
+                    "displayName": "Semana"
+                  },
+                  {
+                    "fieldName": "ds_material",
+                    "displayName": "Item"
+                  },
+                  {
+                    "fieldName": "ds_tipo",
+                    "displayName": "Tipo"
+                  },
+                  {
+                    "fieldName": "qt_consumo",
+                    "displayName": "Consumo",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "qt_esperado",
+                    "displayName": "Esperado",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "nr_score",
+                    "displayName": "Score",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "fl_possivel_ruptura",
+                    "displayName": "Possível ruptura"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalias detectadas"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 12,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "LEFT"
+    },
+    "applyModeEnabled": false
+  }
+}
