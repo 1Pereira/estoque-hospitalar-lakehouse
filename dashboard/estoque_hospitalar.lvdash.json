@@ -538,10 +538,6 @@
                     {
                       "name": "sum(vl_consumo)",
                       "expression": "SUM(`vl_consumo`)"
-                    },
-                    {
-                      "name": "monthly(dt_inicio_mes)",
-                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
                     }
                   ],
                   "disaggregated": false
@@ -549,12 +545,18 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Consumo",
+                  "fields": []
+                }
+              },
               "version": 2,
               "widgetType": "counter",
               "encodings": {
                 "value": {
                   "fieldName": "sum(vl_consumo)",
-                  "displayName": "Consumo",
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "BRL",
@@ -563,15 +565,12 @@
                       "type": "max",
                       "places": 2
                     }
-                  }
-                },
-                "period": {
-                  "fieldName": "monthly(dt_inicio_mes)"
+                  },
+                  "displayName": "Consumo"
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Consumo"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
@@ -903,12 +902,12 @@
                   "datasetName": "ds_mensal",
                   "fields": [
                     {
-                      "name": "ds_grupo",
-                      "expression": "`ds_grupo`"
-                    },
-                    {
                       "name": "sum(vl_consumo)",
                       "expression": "SUM(`vl_consumo`)"
+                    },
+                    {
+                      "name": "ds_grupo",
+                      "expression": "`ds_grupo`"
                     }
                   ],
                   "disaggregated": false
@@ -916,15 +915,18 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Consumo por grupo de material",
+                  "fields": []
+                }
+              },
               "version": 3,
               "widgetType": "bar",
               "encodings": {
                 "x": {
                   "fieldName": "sum(vl_consumo)",
-                  "displayName": "Consumo",
-                  "scale": {
-                    "type": "quantitative"
-                  },
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "BRL",
@@ -933,6 +935,10 @@
                       "type": "max",
                       "places": 2
                     }
+                  },
+                  "displayName": "Consumo",
+                  "scale": {
+                    "type": "quantitative"
                   }
                 },
                 "y": {
@@ -940,14 +946,13 @@
                   "scale": {
                     "type": "categorical",
                     "sort": {
-                      "by": "value"
+                      "by": "x-reversed"
                     }
                   }
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Consumo por grupo de material"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
@@ -968,12 +973,12 @@
                   "datasetName": "ds_mensal",
                   "fields": [
                     {
-                      "name": "ds_estabelecimento",
-                      "expression": "`ds_estabelecimento`"
-                    },
-                    {
                       "name": "sum(vl_consumo)",
                       "expression": "SUM(`vl_consumo`)"
+                    },
+                    {
+                      "name": "ds_estabelecimento",
+                      "expression": "`ds_estabelecimento`"
                     }
                   ],
                   "disaggregated": false
@@ -981,15 +986,18 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Consumo por estabelecimento",
+                  "fields": []
+                }
+              },
               "version": 3,
               "widgetType": "bar",
               "encodings": {
                 "x": {
                   "fieldName": "sum(vl_consumo)",
-                  "displayName": "Consumo",
-                  "scale": {
-                    "type": "quantitative"
-                  },
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "BRL",
@@ -998,6 +1006,10 @@
                       "type": "max",
                       "places": 2
                     }
+                  },
+                  "displayName": "Consumo",
+                  "scale": {
+                    "type": "quantitative"
                   }
                 },
                 "y": {
@@ -1005,14 +1017,13 @@
                   "scale": {
                     "type": "categorical",
                     "sort": {
-                      "by": "value"
+                      "by": "x-reversed"
                     }
                   }
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Consumo por estabelecimento"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
@@ -1033,12 +1044,12 @@
                   "datasetName": "ds_consumo_setor",
                   "fields": [
                     {
-                      "name": "ds_centro_custo",
-                      "expression": "`ds_centro_custo`"
-                    },
-                    {
                       "name": "sum(vl_consumo)",
                       "expression": "SUM(`vl_consumo`)"
+                    },
+                    {
+                      "name": "ds_centro_custo",
+                      "expression": "`ds_centro_custo`"
                     }
                   ],
                   "disaggregated": false
@@ -1046,15 +1057,18 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Consumo por centro de custo",
+                  "fields": []
+                }
+              },
               "version": 3,
               "widgetType": "bar",
               "encodings": {
                 "x": {
                   "fieldName": "sum(vl_consumo)",
-                  "displayName": "Consumo",
-                  "scale": {
-                    "type": "quantitative"
-                  },
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "BRL",
@@ -1063,6 +1077,10 @@
                       "type": "max",
                       "places": 2
                     }
+                  },
+                  "displayName": "Consumo",
+                  "scale": {
+                    "type": "quantitative"
                   }
                 },
                 "y": {
@@ -1070,14 +1088,13 @@
                   "scale": {
                     "type": "categorical",
                     "sort": {
-                      "by": "value"
+                      "by": "x-reversed"
                     }
                   }
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Consumo por centro de custo"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
@@ -1561,12 +1578,12 @@
                   "datasetName": "ds_mensal",
                   "fields": [
                     {
-                      "name": "ds_local_estoque",
-                      "expression": "`ds_local_estoque`"
-                    },
-                    {
                       "name": "measure(Taxa de ruptura)",
                       "expression": "MEASURE(`Taxa de ruptura`)"
+                    },
+                    {
+                      "name": "ds_local_estoque",
+                      "expression": "`ds_local_estoque`"
                     }
                   ],
                   "disaggregated": false
@@ -1574,21 +1591,28 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Taxa de ruptura por local",
+                  "fields": []
+                }
+              },
               "version": 3,
               "widgetType": "bar",
               "encodings": {
                 "x": {
                   "fieldName": "measure(Taxa de ruptura)",
-                  "displayName": "Taxa de ruptura",
-                  "scale": {
-                    "type": "quantitative"
-                  },
                   "format": {
                     "type": "number-percent",
                     "decimalPlaces": {
                       "type": "max",
                       "places": 2
                     }
+                  },
+                  "displayName": "Taxa de ruptura",
+                  "scale": {
+                    "type": "quantitative"
                   }
                 },
                 "y": {
@@ -1596,14 +1620,13 @@
                   "scale": {
                     "type": "categorical",
                     "sort": {
-                      "by": "value"
+                      "by": "x-reversed"
                     }
                   }
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Taxa de ruptura por local"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
@@ -1795,10 +1818,6 @@
                     {
                       "name": "sum(vl_comprado)",
                       "expression": "SUM(`vl_comprado`)"
-                    },
-                    {
-                      "name": "monthly(dt_inicio_mes)",
-                      "expression": "DATE_TRUNC(\"MONTH\", `dt_inicio_mes`)"
                     }
                   ],
                   "disaggregated": false
@@ -1806,12 +1825,18 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Compras",
+                  "fields": []
+                }
+              },
               "version": 2,
               "widgetType": "counter",
               "encodings": {
                 "value": {
                   "fieldName": "sum(vl_comprado)",
-                  "displayName": "Compras",
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "BRL",
@@ -1820,15 +1845,12 @@
                       "type": "max",
                       "places": 2
                     }
-                  }
-                },
-                "period": {
-                  "fieldName": "monthly(dt_inicio_mes)"
+                  },
+                  "displayName": "Compras"
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Compras"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
@@ -2134,12 +2156,12 @@
                   "datasetName": "ds_compras",
                   "fields": [
                     {
-                      "name": "ds_fornecedor",
-                      "expression": "`ds_fornecedor`"
-                    },
-                    {
                       "name": "sum(vl_comprado)",
                       "expression": "SUM(`vl_comprado`)"
+                    },
+                    {
+                      "name": "ds_fornecedor",
+                      "expression": "`ds_fornecedor`"
                     }
                   ],
                   "disaggregated": false
@@ -2147,15 +2169,18 @@
               }
             ],
             "spec": {
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "value": "Compras por fornecedor",
+                  "fields": []
+                }
+              },
               "version": 3,
               "widgetType": "bar",
               "encodings": {
                 "x": {
                   "fieldName": "sum(vl_comprado)",
-                  "displayName": "Compras",
-                  "scale": {
-                    "type": "quantitative"
-                  },
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "BRL",
@@ -2164,6 +2189,10 @@
                       "type": "max",
                       "places": 2
                     }
+                  },
+                  "displayName": "Compras",
+                  "scale": {
+                    "type": "quantitative"
                   }
                 },
                 "y": {
@@ -2171,14 +2200,13 @@
                   "scale": {
                     "type": "categorical",
                     "sort": {
-                      "by": "value"
+                      "by": "x-reversed"
                     }
                   }
                 }
               },
-              "frame": {
-                "showTitle": true,
-                "title": "Compras por fornecedor"
+              "data": {
+                "queryName": "main_query"
               }
             }
           },
