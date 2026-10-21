@@ -25,6 +25,15 @@ resources:
           notebook_task:
             notebook_path: /Workspace/Fullstack project/Gold_to_ML
             source: WORKSPACE
+        - task_key: to_Dashboard
+          depends_on:
+            - task_key: to_ML
+          dashboard_task:
+            subscription:
+              attachment:
+                page_attachment: {}
+            warehouse_id: 17e532a6ec781d02
+            dashboard_id: 01f1cd902e211f5ba31089ec95bf83a8
       queue:
         enabled: true
       parameters:
