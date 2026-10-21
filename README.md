@@ -51,7 +51,7 @@ Todas as tabelas ficam no catálogo `estoque_hospitalar`, nos schemas `bronze`, 
 | `notebooks/Silver_to_Gold.ipynb` | Dimensões, fatos, saldo diário reconstruído, conciliação com o ERP, marts e tabelas de features |
 | `notebooks/Gold_to_ML.ipynb` | Previsão de demanda com backtest, sugestão de compra, segmentação e consumo anômalo |
 | `pipeline/job.yaml` | Definição do Job de orquestração |
-| `dashboards/estoque_hospitalar.lvdash.json` | Dashboard AI/BI exportado do workspace |
+| `dashboard/estoque_hospitalar.lvdash.json` | Dashboard AI/BI exportado do workspace |
 
 ## Fontes
 
@@ -114,7 +114,7 @@ Indicadores de razão (taxa de ruptura, giro, WAPE) são métricas calculadas no
 
 1. Importe os notebooks da pasta `notebooks` no Workspace do Databricks.
 2. No `Landing_to_Bronze`, execute as seções 1 e 2 e faça o upload dos arquivos em `<catalogo>.landing.erp`, uma pasta por fonte.
-3. Importe `dashboards/estoque_hospitalar.lvdash.json` no Workspace e publique o dashboard.
+3. Importe `dashboard/estoque_hospitalar.lvdash.json` no Workspace e publique o dashboard.
 4. Crie o Job a partir do `pipeline/job.yaml`, ajustando os caminhos dos notebooks, o `dashboard_id` e o `warehouse_id`.
 
 Desenvolvido na Databricks Free Edition, com computação serverless.
